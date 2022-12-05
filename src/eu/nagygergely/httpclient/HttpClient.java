@@ -1,70 +1,49 @@
 package eu.nagygergely.httpclient;
 
-import com.google.common.base.CharMatcher;
-import com.google.common.base.Joiner;
-import com.google.common.base.Splitter;
-import com.google.common.collect.Iterables;
-import com.google.common.collect.Maps;
-import com.google.common.io.ByteStreams;
-import com.ning.http.util.Base64;
-
-import eu.nagygergely.httpclient.PostMap.formType;
-
-import java.io.File;
-import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.io.UnsupportedEncodingException;
 import java.net.HttpURLConnection;
 import java.net.InetSocketAddress;
 import java.net.MalformedURLException;
 import java.net.Proxy;
-import java.net.Socket;
 import java.net.URISyntaxException;
 import java.net.URL;
 import java.net.URLConnection;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
-import java.security.SecureRandom;
-import java.security.cert.X509Certificate;
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.zip.GZIPInputStream;
 import java.util.zip.Inflater;
 import java.util.zip.InflaterInputStream;
 
-import javax.net.ssl.HostnameVerifier;
 import javax.net.ssl.HttpsURLConnection;
-import javax.net.ssl.SSLContext;
-import javax.net.ssl.SSLSession;
-import javax.net.ssl.SSLSocket;
-import javax.net.ssl.SSLSocketFactory;
-import javax.net.ssl.TrustManager;
-import javax.net.ssl.X509TrustManager;
-
 import org.apache.commons.io.IOUtils;
 
 public class HttpClient {
 	
-	final static boolean DEBUG = false;
+	public static boolean DEBUG = false;
 	
 	protected String url_prefix;
+	
+	protected URLConnectionFactory connectionFactory = new DefaultUrlConnectionFactory();
 
+	public HttpClient() {
+		this("");
+	}
+	
 	public HttpClient(String url) {
-		/*if (!url.endsWith("/")) {
-			url = url + "/";
-		}*/
 		this.url_prefix = url;
 	}
 
-	public HttpClient() {
-		this.url_prefix = "";
+	public HttpClient(URLConnectionFactory connectionFactory) {
+		this("", connectionFactory);
+	}
+	
+	public HttpClient(String url, URLConnectionFactory connectionFactory) {
+		this(url);
+		this.connectionFactory = connectionFactory;
 	}
 
 	protected ArrayList<HttpResult> completedes = new ArrayList<HttpResult>();
@@ -103,6 +82,10 @@ public class HttpClient {
 
 	public void setHeader(String key, String value) {
 		this.headers.put(key, value);
+	}
+	
+	public HashMap<String, String> getHeaders() {
+		return headers;
 	}
 
 	private Response lastResponse = null;
@@ -153,7 +136,7 @@ public class HttpClient {
 				public void run() {
 					try {
 						Response ret = HttpClient.this.doGetRequest(
-								new URL(HttpClient.this.url_prefix + url), headers, params, false);
+								new URL(HttpClient.this.url_prefix + url), headers, params);
 						HttpClient.this.lastResponse = ret;
 						if (result != null) {
 							result.Completed(ret);
@@ -168,7 +151,7 @@ public class HttpClient {
 			});
 			a.start();
 		} else {
-			Response ret = doGetRequest(new URL(this.url_prefix + url), headers, params, false);
+			Response ret = doGetRequest(new URL(this.url_prefix + url), headers, params);
 			this.lastResponse = ret;
 			if (result != null) {
 				result.Completed(ret);
@@ -184,11 +167,11 @@ public class HttpClient {
 	}
 	
 	public Response Post(String url) throws Exception {
-		return Post(url, null, null);
+		return Post(url, new HashMap<String, String>(), null);
 	}
 	
 	public Response Post() throws Exception {
-		return Post("", null, null);
+		return Post("", new HashMap<String, String>(), null);
 	}
 
 	public Response Post(String url, HashMap<String, String> headers, PostMap params) throws Exception {
@@ -201,6 +184,14 @@ public class HttpClient {
 		});
 		return r.get(0);
 	}
+	
+	public Response Post(String url, PostMap params, HashMap<String, String> headers) throws Exception {
+		return Post(url, headers, params);
+	}
+	
+	public Response Post(String url, PostMap params) throws Exception {
+		return Post(url, null, params);
+	}
 
 	public void Post(final String url, final HashMap<String, String> headers, final PostMap params,
 			boolean async, final HttpResult result) throws Exception {
@@ -210,7 +201,7 @@ public class HttpClient {
 				public void run() {
 					try {
 						Response ret = HttpClient.this.doPostRequest(new URL(HttpClient.this.url_prefix
-								+ url), headers, params, false);
+								+ url), headers, params);
 						HttpClient.this.lastResponse = ret;
 						if (result != null) {
 							result.Completed(ret);
@@ -225,7 +216,7 @@ public class HttpClient {
 			});
 			a.start();
 		} else {
-			Response ret = doPostRequest(new URL(this.url_prefix + url), headers, params, false);
+			Response ret = doPostRequest(new URL(this.url_prefix + url), headers, params);
 			this.lastResponse = ret;
 			if (result != null) {
 				result.Completed(ret);
@@ -236,128 +227,13 @@ public class HttpClient {
 		}
 	}
 
-	String boundary = Long.toHexString(System.currentTimeMillis());
-
 	protected void createParamString(URLConnection connection, PostMap params) throws IOException {
-		if(params.formType() == formType.Application)
-		{
-			connection.setRequestProperty("Content-Type", params.formType().type()+";");
-			StringBuilder sb = new StringBuilder();
-			if ((params != null) && (params.size() > 0)) {
-				for (String param : params.keySet()) {
-					sb.append(param).append("=").append(params.get(param)).append("&");
-				}
-				sb.deleteCharAt(sb.length() - 1);
-			}
-			connection.setDoOutput(true);
-			OutputStream output = connection.getOutputStream();
-			output.write(sb.toString().getBytes());
-		}
-		else if(params.formType() == formType.MultiPart)
-		{
-			connection.setDoOutput(true);
-			connection.setRequestProperty("Content-Type", params.formType().type()+"; boundary=" + this.boundary);
-			if ((params != null) && (params.size() > 0)) {
-				OutputStream output = connection.getOutputStream();
-				for (String param : params.keySet()) {
-					// System.out.println(params.get(param).getClass());
-					if (params.get(param) != null) {
-						if ((params.get(param) instanceof File)) {
-							File file = (File) params.get(param);
-							InputStream f = new FileInputStream(file);
-							output.write(("--" + this.boundary).getBytes());
-							output.write(13);
-							output.write(10);
-							output.write(("Content-Disposition: form-data; name=\"" + param + "\"; filename=\""
-									+ file.getName() + "\"").getBytes());
-							output.write(13);
-							output.write(10);
-							output.write("Content-Type: application/octet-stream".getBytes());
-							output.write(13);
-							output.write(10);
-							output.write(13);
-							output.write(10);
-							ByteStreams.copy(f, output);
-							output.write(13);
-							output.write(10);
-							f.close();
-						}else if ((params.get(param) instanceof InputStream)) {
-							InputStream f = (InputStream) params.get(param);
-							output.write(("--" + this.boundary).getBytes());
-							output.write(13);
-							output.write(10);
-							output.write(("Content-Disposition: form-data; name=\"" + param + "\"; filename=\""
-									+ "file_"+System.currentTimeMillis()+".tmp" + "\"").getBytes());
-							output.write(13);
-							output.write(10);
-							output.write("Content-Type: application/octet-stream".getBytes());
-							output.write(13);
-							output.write(10);
-							output.write(13);
-							output.write(10);
-							ByteStreams.copy(f, output);
-							output.write(13);
-							output.write(10);
-							f.close();
-						}
-						/*else if (params.get(param) instanceof byte[]) {
-							byte[] f = (byte[]) params.get(param);
-							output.write(("--" + this.boundary).getBytes());
-							output.write(13);
-							output.write(10);
-							output.write(("Content-Disposition: form-data; name=\"" + param + "\"; filename=\""
-									+ randomString() + "\"").getBytes());
-							output.write(13);
-							output.write(10);
-							output.write("Content-Type: multipart/mixed; charset=UTF-8".getBytes());
-							output.write(13);
-							output.write(10);
-							output.write(13);
-							output.write(10);
-							output.write(f);
-							output.write(13);
-							output.write(10);
-						}*/
-						else if(params.get(param) instanceof byte[]) {
-							output.write(("--" + this.boundary).getBytes());
-							output.write(13);
-							output.write(10);
-							output.write(("Content-Disposition: form-data; name=\"" + param + "\"; filename=\""
-									+ "file_"+System.currentTimeMillis()+".tmp" + "\"").getBytes());
-							output.write(13);
-							output.write(10);
-							output.write(13);
-							output.write(10);
-							output.write((byte[]) params.get(param));
-							output.write(13);
-							output.write(10);
-						} else {
-							output.write(("--" + this.boundary).getBytes());
-							output.write(13);
-							output.write(10);
-							output.write(("Content-Disposition: form-data; name=\"" + param + "\"").getBytes());
-							output.write(13);
-							output.write(10);
-							output.write(13);
-							output.write(10);
-							output.write(params.get(param).toString().getBytes());
-							output.write(13);
-							output.write(10);
-						}
-					} else
-						System.err.println("Param Error: " + param);
-				}
-				output.write(("--" + this.boundary + "--").getBytes());
-			}
-		}
-		int responseCode = ((HttpURLConnection) connection).getResponseCode();
-		if(DEBUG)
-			System.out.println(responseCode);
+		params.appendBody(connection);
 	}
 
 	protected CookieManager cm = new CookieManager();
 
-	public Object getCookie() {
+	public CookieManager getCookie() {
 		return this.cm;
 	}
 
@@ -365,59 +241,59 @@ public class HttpClient {
 		this.cm = cm;
 	}
 
-	private String AuthenticatorUser = "";
-	private String AuthenticatorPass = "";
-	private HashMap<String, String> authFields = null;
-	private int AuthenticatorType = -1;
-	public static final int AUTHENTICATOR_TYPE_NONE = -1;
-	public static final int AUTHENTICATOR_TYPE_BASIC = 1;
-	public static final int AUTHENTICATOR_TYPE_DIGEST = 2;
+	protected AuthInterface auth;
 
 	public void setAuthenticator() {
-		this.AuthenticatorUser = "";
-		this.AuthenticatorPass = "";
-		this.AuthenticatorType = -1;
-		authFields = null;
+		this.auth = null;
 	}
 
-	public void setDigestAuthenticator(String username, String password) {
-		this.AuthenticatorUser = username;
-		this.AuthenticatorPass = password;
-		this.AuthenticatorType = 2;
-		authFields = null;
+	public void setAuthenticator(AuthInterface auth) {
+		this.auth = auth;
+	}
+	
+	public AuthInterface getAuthenticator() {
+		return auth;
 	}
 
-	public void setBasicAuthenticator(String username, String password) {
-		this.AuthenticatorUser = username;
-		this.AuthenticatorPass = password;
-		this.AuthenticatorType = 1;
-		authFields = null;
-	}
-
-	private boolean autoReferer = false;
-	private boolean followRedirect = true;
+	protected boolean autoReferer = false;
+	protected boolean followRedirect = true;
+	
 	public void setAutoReferer(boolean referer)
 	{
 		autoReferer = referer;
 	}
+	
+	public boolean getAutoReferer()
+	{
+		return autoReferer;
+	}
+	
 	public void followRedirect(boolean redirect)
 	{
 		followRedirect = redirect;
 	}
-	private String lastUrl = "http://google.com/";
+	
+	protected String lastUrl = "http://google.com/";
+	
+	public void setLastUrl(String lastUrl) {
+		this.lastUrl = lastUrl;
+	}
+	
+	public String getLastUrl() {
+		return lastUrl;
+	}
+	
 	public static final String QUERY_CHAR = "?";
 	public static final String ANCHOR_CHAR = "#";
 
-	protected Response doGetRequest(URL url, HashMap<String, String> headers, HashMap<String, Object> params,
-			boolean debug) throws Exception {
+	protected Response doGetRequest(URL url, HashMap<String, String> headers, HashMap<String, Object> params) throws Exception {
 		GET get = new GET(url, headers, params);
-		return sendRequest(get, debug);
+		return sendRequest(get);
 	}
 
-	protected Response doPostRequest(URL url, HashMap<String, String> headers, PostMap body,
-			boolean debug) throws Exception {
+	protected Response doPostRequest(URL url, HashMap<String, String> headers, PostMap body) throws Exception {
 		POST post = new POST(url, headers, body);
-		return sendRequest(post, debug);
+		return sendRequest(post);
 	}
 	
 	Proxy proxy = null;
@@ -497,7 +373,7 @@ public class HttpClient {
 	private void StreamRequest(Request request, OutputStream out, InputStream in)
 	{
 		try {
-			URLConnection conn = createConnection(request, false);
+			URLConnection conn = createConnection(request);
 			conn.setDoOutput(true);
 			out = conn.getOutputStream();
 			in = conn.getInputStream();
@@ -506,7 +382,7 @@ public class HttpClient {
 		}
 	}
 	
-	private Socket removeSSLv2v3(Socket socket) {
+	/*private Socket removeSSLv2v3(Socket socket) {
 
 	    if (!(socket instanceof SSLSocket)) {
 	        return socket;
@@ -525,175 +401,42 @@ public class HttpClient {
 	    sslSocket.setEnabledProtocols(set.toArray(new String[0]));
 
 	    return sslSocket;
-	}
+	}*/
 	
-	private URLConnection createConnection(Request request, boolean debug) throws Exception
+	private URLConnection createConnection(Request request) throws Exception
 	{
-		URLConnection conn = null;
-		Response response = null;
-		//Proxy proxy = new Proxy(Proxy.Type.SOCKS, new InetSocketAddress("localhost", 8888));
-        /*Authenticator authenticator = new Authenticator() {
-
-            public PasswordAuthentication getPasswordAuthentication() {
-                return (new PasswordAuthentication("user",
-                        "password".toCharArray()));
-            }
-        };*/
-		if (request.getUrl().getProtocol().startsWith("https")) {
-			if(proxy != null)
-				conn = (HttpsURLConnection) request.getUrl().openConnection(proxy);
-			else
-				conn = (HttpsURLConnection) request.getUrl().openConnection();
-			
-			conn.setConnectTimeout(timeout);
-
-			SSLSocketFactory sslSocketFactory = null;
-			TrustManager[] trustAllCerts = { new X509TrustManager() {
-				public void checkClientTrusted(X509Certificate[] chain, String authType) {
-					// nothing to do
-				}
-
-				public void checkServerTrusted(X509Certificate[] chain, String authType) {
-					// nothing to do
-				}
-
-				public X509Certificate[] getAcceptedIssuers() {
-					return null;
-				}
-			} };
-			sslSocketFactory = connectionType.getSocketFactory(trustAllCerts);
-			
-			((HttpsURLConnection) conn).setSSLSocketFactory(sslSocketFactory);
-			((HttpsURLConnection) conn).setInstanceFollowRedirects(false);
-			((HttpsURLConnection) conn).setHostnameVerifier(new HostnameVerifier(){
-				@Override
-				public boolean verify(String hostname, SSLSession arg1) {
-					return true;
-				}
-			});
-			HttpsURLConnection.setFollowRedirects(false);
-		} else {
-			if(proxy != null)
-				conn = request.getUrl().openConnection(proxy);
-			else
-				conn = request.getUrl().openConnection();
-			((HttpURLConnection) conn).setInstanceFollowRedirects(false);
-			HttpURLConnection.setFollowRedirects(false);
-		}
-		/*String password = "username:password";
-        String encodedPassword = Base64.encode( password.getBytes() );
-        conn.setRequestProperty( "Proxy-Authorization", encodedPassword);*/
-		this.cm.setCookies(conn);
+		URLConnection connection = this.connectionFactory.getConnection(this, request);
+		this.cm.setCookies(connection);
 		if (request.headers != null) {
 			for (String header : request.headers.keySet()) {
-				conn.setRequestProperty(header, (String) request.headers.get(header));
+				connection.setRequestProperty(header, (String) request.headers.get(header));
 			}
 		}
 		if (this.headers != null) {
 			for (String header : this.headers.keySet()) {
-				conn.setRequestProperty(header, (String) this.headers.get(header));
+				connection.setRequestProperty(header, (String) this.headers.get(header));
 			}
 		}
 		if (this.autoReferer) {
-			conn.setRequestProperty("Referer", this.lastUrl);
+			connection.setRequestProperty("Referer", this.lastUrl);
 			this.lastUrl = request.getUrl().toString();
 		}
-		if (this.AuthenticatorType != -1) {
-			int tAuth = this.AuthenticatorType;
-			this.AuthenticatorType = -1;
-			response = sendRequest(request, debug);
-			this.AuthenticatorType = tAuth;
-
-			String username = this.AuthenticatorUser;
-			String password = this.AuthenticatorPass;
-			String auth = null;
-			try {
-				auth = (String) ((List<?>) response.getHeaders().get("WWW-Authenticate")).get(0);
-			} catch (NullPointerException localNullPointerException) {
-			}
-			if (auth == null) {
-				auth = "";
-			}
-			boolean AuthStart = false;
-			if (this.AuthenticatorType == 1) {
-				String userpass = username + ":" + password;
-				String basicAuth = "Basic " + new String(Base64.encode(userpass.getBytes()));
-				conn.setRequestProperty("Authorization", basicAuth);
-			} else if (this.AuthenticatorType == 2) {
-				this.authFields = splitAuthFields(auth.substring(7));
-				AuthStart = true;
-
-				MessageDigest md5 = null;
-				try {
-					md5 = MessageDigest.getInstance("MD5");
-				} catch (NoSuchAlgorithmException e) {
-					e.printStackTrace();
-				}
-				Joiner colonJoiner = Joiner.on(':');
-
-				String HA1 = null;
-				try {
-					md5.reset();
-					String ha1str = colonJoiner.join(username, this.authFields.get("realm"),
-							new Object[] { password });
-					md5.update(ha1str.getBytes("ISO-8859-1"));
-					byte[] ha1bytes = md5.digest();
-					HA1 = bytesToHexString(ha1bytes);
-				} catch (UnsupportedEncodingException e) {
-					e.printStackTrace();
-				}
-				String method = "GET";
-				if ((request instanceof POST)) {
-					method = "POST";
-				}
-				String HA2 = null;
-				try {
-					md5.reset();
-					String ha2str = colonJoiner.join(method, conn.getURL().getPath(), new Object[0]);
-					md5.update(ha2str.getBytes("ISO-8859-1"));
-					HA2 = bytesToHexString(md5.digest());
-				} catch (UnsupportedEncodingException e) {
-					e.printStackTrace();
-				}
-				String HA3 = null;
-				try {
-					md5.reset();
-					String ha3str = colonJoiner.join(HA1, this.authFields.get("nonce"), new Object[] { HA2 });
-					md5.update(ha3str.getBytes("ISO-8859-1"));
-					HA3 = bytesToHexString(md5.digest());
-				} catch (UnsupportedEncodingException e) {
-					e.printStackTrace();
-				}
-				StringBuilder sb = new StringBuilder(128);
-				sb.append("Digest ");
-				sb.append("username").append("=\"").append(username).append("\",");
-				sb.append("realm").append("=\"").append((String) this.authFields.get("realm")).append("\",");
-				sb.append("nonce").append("=\"").append((String) this.authFields.get("nonce")).append("\",");
-				sb.append("uri").append("=\"").append(conn.getURL().getPath()).append("\",");
-				if (!AuthStart) {
-					sb.append("qop").append("=").append("auth").append(",");
-					sb.append("nc=").append((String) this.authFields.get("nc")).append(",");
-					sb.append("cnonce=\"").append((String) this.authFields.get("cnonce")).append("\",");
-				}
-				sb.append("response").append("=\"").append(HA3).append("\"");
-				conn.setRequestProperty("Authorization", sb.toString());
-			}
+		if (this.auth != null) {
+			this.auth.prepareAuthForConnection(request, this, connection);
 		}
-		if ((request instanceof POST)) {
-			createParamString(conn, ((POST) request).body);
-		}
-		return conn;
+		request.prepareConnection(connection);
+		return connection;
 	}
 
-	private Response sendRequest(Request request, boolean debug) throws Exception {
-		URLConnection conn = null;
+	protected Response sendRequest(Request request) throws Exception {
+		URLConnection connection = null;
 		Response response = null;
 		long time = 0L;
 		try{
-			conn = createConnection(request, debug);
+			connection = createConnection(request);
 			int status = 0;
 			try{
-				status = ((HttpURLConnection) conn).getResponseCode();
+				status = ((HttpURLConnection) connection).getResponseCode();
 			}
 			catch (Exception e)
 			{
@@ -701,23 +444,23 @@ public class HttpClient {
 			}
 			/*if (status != 200) {
 				Res r = new Res();
-				r.html = ((HttpURLConnection) conn).getResponseMessage();
+				r.html = ((HttpURLConnection) connection).getResponseMessage();
 				r.bhtml = r.html.getBytes("UTF-8");
-				response = new Response(request.getUrl().toString(), status, readInputStream(conn), conn.getHeaderFields());
+				response = new Response(request.getUrl().toString(), status, readInputStream(connection), connection.getHeaderFields());
 			} else {
-				response = new Response(request.getUrl().toString(), status, readInputStream(conn), conn.getHeaderFields());
+				response = new Response(request.getUrl().toString(), status, readInputStream(connection), connection.getHeaderFields());
 			}*/
-			response = new Response(request.getUrl().toString(), status, readInputStream(conn), conn.getHeaderFields());
+			response = new Response(request.getUrl().toString(), status, readInputStream(connection), connection.getHeaderFields());
 			response.time = (System.currentTimeMillis() - time);
-			if (debug) {
+			if (DEBUG) {
 				dumpRequest(request, response);
 			}
-			this.cm.storeCookies(conn);
+			this.cm.storeCookies(connection);
 			if (status != 200) {
-				if (followRedirect && (conn.getHeaderField("Location") != null) && (!conn.getHeaderField("Location").isEmpty())) {
-					String newUrl = conn.getHeaderField("Location");
+				if (followRedirect && (connection.getHeaderField("Location") != null) && (!connection.getHeaderField("Location").isEmpty())) {
+					String newUrl = connection.getHeaderField("Location");
 					if (isValidURL(newUrl)) {
-						request = new Request(new URL(newUrl), request.method, request.headers);
+						request = new GET(new URL(newUrl), request.headers, null);
 					} else {
 						String path = request.getUrl().getPath();
 						if (path.length() - request.getUrl().getFile().length() >= 0) {
@@ -731,17 +474,17 @@ public class HttpClient {
 						URL newURL = new URL(request.getUrl().getProtocol() + "://" + request.getUrl().getHost()
 								+ (request.getUrl().getPort() != -1 ? ":" + request.getUrl().getPort() : "") + path
 								+ "/" + newUrl);
-						request = new Request(newURL, request.method, request.headers);
+						request = new GET(newURL, request.headers, null);
 					}
-					response = sendRequest(request, debug);
+					response = sendRequest(request);
 				}
 			}
 		} catch (Exception e) {
 			//e.printStackTrace(System.err);
 			throw e;
 		} finally {
-			if (conn != null) {
-				((HttpURLConnection) conn).disconnect();
+			if (connection != null) {
+				((HttpURLConnection) connection).disconnect();
 			}
 		}
 		return response;
@@ -868,6 +611,11 @@ public class HttpClient {
 			super(baseUrl, "POST", headers);
 			this.body = body;
 		}
+		
+		@Override
+		public void prepareConnection(URLConnection connection) throws IOException {
+			this.body.appendBody(connection);
+		}
 	}
 
 	private class GET extends Request {
@@ -897,6 +645,12 @@ public class HttpClient {
 			}
 			return sb.toString();
 		}
+		
+		@Override
+		public void prepareConnection(URLConnection connection)
+				throws IOException {
+			// nothing to do	
+		}
 	}
 
 	public static boolean isValidURL(String url) {
@@ -925,27 +679,6 @@ public class HttpClient {
 			}
 		}
 		return url;
-	}
-
-	private static String bytesToHexString(byte[] bytes) {
-		StringBuilder sb = new StringBuilder(bytes.length * 2);
-		for (int i = 0; i < bytes.length; i++) {
-			sb.append("0123456789abcdef".charAt((bytes[i] & 0xF0) >> 4));
-			sb.append("0123456789abcdef".charAt((bytes[i] & 0xF) >> 0));
-		}
-		return sb.toString();
-	}
-
-	private static HashMap<String, String> splitAuthFields(String authString) {
-		HashMap<String, String> fields = Maps.newHashMap();
-		CharMatcher trimmer = CharMatcher.anyOf("\"\t ");
-		Splitter commas = Splitter.on(',').trimResults().omitEmptyStrings();
-		Splitter equals = Splitter.on('=').trimResults(trimmer).limit(2);
-		for (String keyPair : commas.split(authString)) {
-			String[] valuePair = (String[]) Iterables.toArray(equals.split(keyPair), String.class);
-			fields.put(valuePair[0], valuePair[1]);
-		}
-		return fields;
 	}
 
 	public static void copyStream(InputStream input, OutputStream output) throws IOException {

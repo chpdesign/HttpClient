@@ -6,23 +6,33 @@ import java.net.Socket;
 import java.net.UnknownHostException;
 import java.security.KeyManagementException;
 import java.security.NoSuchAlgorithmException;
-
+import java.security.SecureRandom;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLSocket;
 import javax.net.ssl.SSLSocketFactory;
+import javax.net.ssl.TrustManager;
 
 /**
  * @author fkrauthan
  */
 public class TLSSocketFactory extends SSLSocketFactory {
 
-    private SSLSocketFactory internalSSLSocketFactory;
+    protected SSLSocketFactory internalSSLSocketFactory;
 
     public TLSSocketFactory() throws KeyManagementException, NoSuchAlgorithmException {
-        SSLContext context = SSLContext.getInstance("TLS");
-        context.init(null, null, null);
-        internalSSLSocketFactory = context.getSocketFactory();
+        this(null);
     }
+    
+    public TLSSocketFactory(TrustManager[] trustManagers) throws KeyManagementException, NoSuchAlgorithmException {
+    	internalSSLSocketFactory = this.getContext(trustManagers).getSocketFactory();
+    }
+    
+    protected SSLContext getContext(TrustManager[] trustManagers) throws KeyManagementException, NoSuchAlgorithmException {
+    	SSLContext context = SSLContext.getInstance("TLS");
+    	context.init(null, trustManagers, new SecureRandom());
+    	context.getDefaultSSLParameters().setProtocols(new String[] {"TLSv1.2"});
+    	return context;
+	}
 
     @Override
     public String[] getDefaultCipherSuites() {
@@ -64,9 +74,9 @@ public class TLSSocketFactory extends SSLSocketFactory {
         return enableTLSOnSocket(internalSSLSocketFactory.createSocket(address, port, localAddress, localPort));
     }
 
-    private Socket enableTLSOnSocket(Socket socket) {
+    protected Socket enableTLSOnSocket(Socket socket) {
         if(socket != null && (socket instanceof SSLSocket)) {
-            ((SSLSocket)socket).setEnabledProtocols(new String[] {"TLSv1.1", "TLSv1.2"});
+            ((SSLSocket)socket).setEnabledProtocols(new String[] {"TLSv1.2"});
         }
         return socket;
     }
