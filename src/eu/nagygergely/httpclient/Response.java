@@ -48,7 +48,7 @@ public class Response {
 		return this.headers;
 	}
 
-	public Response(String url, int status, HttpClient.Res body, Map<String, List<String>> headers) {
+	public Response(String url, int status, Body body, Map<String, List<String>> headers) {
 		this.status = status;
 		this.bodyString = body.html;
 		this.bbody = body.bhtml;

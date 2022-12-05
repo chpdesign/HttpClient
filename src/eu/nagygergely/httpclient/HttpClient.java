@@ -747,7 +747,7 @@ public class HttpClient {
 		return response;
 	}
 
-	private static Res readInputStream(URLConnection conn) throws IOException {
+	private static Body readInputStream(URLConnection conn) throws IOException {
 		InputStream is;
 		if (200 <= ((HttpURLConnection) conn).getResponseCode() && ((HttpURLConnection) conn).getResponseCode() <= 299) {
 		    is = conn.getInputStream();
@@ -778,7 +778,7 @@ public class HttpClient {
 			//}
 		}
 		//InputStream is = conn.getInputStream();
-		Res r = new Res();
+		Body r = new Body();
 
 		String encoding = "UTF-8";
 		if (conn.getContentEncoding() != null) {
@@ -954,11 +954,6 @@ public class HttpClient {
 		while ((bytesRead = input.read(buffer)) != -1) {
 			output.write(buffer, 0, bytesRead);
 		}
-	}
-
-	protected static class Res {
-		String html;
-		byte[] bhtml;
 	}
 
 	public String getPrefix() {
